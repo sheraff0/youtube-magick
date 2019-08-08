@@ -1,0 +1,172 @@
+#!/bin/bash
+# ================== youtube-magick script ==================
+
+# Automates manipulations with YouTube files obtained through youtube-dl utility.
+
+# Available commands:
+# - (default)	- create .dirlist file with relative paths of all subject directories
+#	- p	- check .url files located in subdirectories;
+#		  create .playlist file with video ID's.
+#	- f	- save previous folder contents in .folder.0 and create new .folder files
+#		  listing video ID's present in each folder.
+#	- u	- update .deleted files, if comparison of previous .folder.0 and current .folder lists
+#		  shows the difference.
+#	- d	- download files from .playlist {minus .folder minus .deleted}
+#	- D	= fudf combined.
+
+
+# All commands should be placed in a single letter-block  in desired execution order.
+# Other arguments will be ignored.
+
+# Example:	$ ./youtube-magick pD
+
+
+# Creates list of relative paths to subject directories
+function dir_list {
+  echo -e "Creating subject directories list \e[92m.dirlist\e[0m:\e[94m"
+  find . -type d | \
+    tee .dirlist
+  echo -e '\e[0m................. Total of\e[1;93m' `cat .dirlist | wc -l` '\e[0mdirectorie(s) detected.'
+}
+
+# Creates playlist file
+function playlist {
+
+  if [ -f "$1/.url" ]; then
+    rm -f "$1/.playlist.tmp"
+    echo -e 'Creating \e[92m".playlist"\e[0m for link(s) filed in \e[92m".url"\e[0m..................'
+
+    while read item; do
+      echo -e '\e[95m'"$item"'\e[0m ---------> \e[93m'
+
+      if [[ "$item" == *"watch"* ]]; then
+        echo "$item" | sed 's/^.*watch?v=\(.\{11\}\)/\1/' | tee -a "$1/.playlist.tmp"
+      else
+        youtube-dl -j --proxy socks5://127.0.0.1:9050 --flat-playlist --geo-bypass --match-title "$match" "$item" | xargs -0 -i -d '\n' printf '{}\n' | grep . > "$1/.playlist.json"
+        cat "$1/.playlist.json" | sed 's/\(title\"\: \"\).*$/\1\"\}/' \
+         | jq -r '.url' | tee -a "$1/.playlist.tmp"
+        rm -f "$1/.playlist.json"
+      fi
+
+    done < <(cat "$1/.url" | sed 's/watch?v=.\{11\}\&\(list=.*$\)/playlist?\1/')
+
+    sort "$1/.playlist.tmp" | uniq > "$1/.playlist"
+    rm -f "$1/.playlist.tmp"
+
+				# eliminating "watch" if "list" is appended 
+    echo -e "\e[0mDone. \e[1;93m"`cat "$1/.playlist" | wc -l`"\e[0m unique video(s) detected."
+    rm -f "$1/.playlist.json"
+  fi
+
+}
+
+# Creates folder contents file with YouTube videos ID's
+function folder {
+
+  if [ -f "$1/.folder" ]; then
+    echo -e "Saving previous \e[92m.folder\e[0m contents in \e[92m.folder.0\e[0m"
+    mv -f "$1/.folder" "$1/.folder.0"
+  fi
+
+  echo -e "Creating new \e[92m.folder\e[0m file..."
+  find "$1" -maxdepth 1 | sed -n 's/^.*-\(.\{11\}\)\.[a-z0-9]\{3,4\}$/\1/p' > "$1/.folder"
+                 # extracting barebone YouTube video ID's
+  echo -e "Done.  \e[1;93m"`cat "$1/.folder" | wc -l`"\e[0m file(s) found."
+}
+
+# Updates .deleted file
+function update {
+
+  if [ -f "$1/.folder.0" ] && [ -f "$1/.folder" ]; then
+    echo -e "\nComparing lists of \e[92m.folder\e[0m and \e[92m.folder.0\e[0m..."
+    comm -23 <(sort "$1/.folder.0") <(sort "$1/.folder") > "$1/.missing"
+    echo -e "Done. \e[1;91m"`cat "$1/.missing" | wc -l`"\e[0m file(s) missing."
+
+    if [ -f "$1/.deleted" ]; then
+      comm -23 <(sort "$1/.missing") <(sort "$1/.deleted") > "$1/.deleted.tmp" # escape double .deleted index
+      cat "$1/.deleted.tmp" >> "$1/.deleted"
+      rm -f "$1/.deleted.tmp" "$1/.missing"
+    else
+      mv "$1/.missing" "$1/.deleted"
+    fi
+
+    echo -e "Updated \e[92m.deleted\e[0m file."
+  else
+    echo -e "\n\e[92m.folder\e[0m or \e[92m.folder.0\e[0m missing, nothing to update."
+  fi
+
+}
+
+function download {
+
+  if [ -f "$1/.playlist" ] && [ -f "$1/.folder" ]; then
+    echo -e '\nCreating \e[92m.download\e[0m file for videos in playlist missing from current folder...............'
+    comm -13 <(sort "$1/.folder") <(sort "$1/.playlist") > "$1/.download.tmp" # files from .playlist(.url) minus .folder
+
+    if [ -f "$1/.deleted" ]; then
+      comm -13 <(sort "$1/.deleted") <(sort "$1/.download.tmp") > "$1/.download" # ... minus .deleted
+    else
+      cat "$1/.download.tmp" > "$1/.download"
+    fi
+
+    rm -f "$1/.download.tmp"
+
+    if [ -s "$1/.download" ]; then
+      echo -e "Files to download\e[95m"
+      cat "$1/.download"
+      echo -e '\e[0m'
+      echo -e 'Downloading files\e[5m...................\e[0m\n'
+
+      cat "$1/.download" | sed 's/[^ ]*/https:\/\/www.youtube.com\/watch\?v=&/' | xargs -i \
+        youtube-dl --proxy socks5://127.0.0.1:9050 -i -f "$quality" \
+          --external-downloader aria2c \
+          --external-downloader-args "-x 16 -s 16 -k 1M" \
+          "{}"
+    else
+      echo -e "No files to download."
+    fi
+
+    rm -f "$1/.download"
+
+  else
+    echo -e "\n\e[92m.playlist\e[0m or \e[92m.download\e[0m file missing, nothing to download."
+  fi
+}
+
+function parse_execute {
+  case "$2" in
+    "") quality="best" ;;
+    *) quality="$2" ;;
+  esac
+
+  case "$3" in
+    "") match=".*" ;;
+    *) match="$3" ;;
+  esac
+
+  while read line; do
+    echo -e '\nProcessing directory: \e[96m'"$line"'\e[0m ------->'
+
+    while read option; do
+      case "$option" in
+        "p")
+          playlist "$line"
+        ;;
+        "f")
+          folder "$line"
+        ;;
+        "u")
+          update "$line"
+        ;;
+        "d")
+          download "$line"
+        ;;
+      esac
+    done < <(echo "$1" | sed -e 's/[^ ]/&\n/g' | grep .)
+
+  done <.dirlist
+}
+
+dir_list
+parse_execute "$1" "$2" "$3"
+exit
