@@ -1,7 +1,8 @@
 #!/bin/bash
-# ================== youtube-magick script ==================
+# ================== youtube-magick-tor script ==================
 
 # Automates manipulations with YouTube files obtained through youtube-dl utility.
+# Presumes Tor running at socks5://127.0.0.1:9050, to bypass regional restrictions.
 
 # Available commands:
 # - (default)	- create .dirlist file with relative paths of all subject directories
